@@ -1,0 +1,100 @@
+name: CI/CD Pipeline Variant 2
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ '*' ]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Run flake8
+        run: |
+          pip install flake8
+          mkdir -p reports
+          flake8 src/ tests/ --max-line-length=120 > reports/flake8.txt
+      - name: Upload flake8 report
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake8-report
+          path: reports/flake8.txt
+          retention-days: 7
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python-version }}" }
+      - name: Run pytest
+        run: |
+          pip install -r requirements-dev.txt
+          pytest tests/ --junitxml=reports/junit.xml --cov=src --cov-report=html:reports/coverage-html/
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ matrix.python-version }}
+          path: reports/
+          retention-days: 30
+
+  build:
+    needs: test
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and save Docker image
+        run: |
+          mkdir -p dist
+          docker build -t todo-api:${{ github.sha }} .
+          docker save todo-api:${{ github.sha }} > dist/image.tar
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: dist/image.tar
+
+  sbom:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: 
+          name: docker-image
+          path: dist
+      - name: Generate SBOM with Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.4.1
+          docker load -i dist/image.tar
+          mkdir -p sbom
+          syft todo-api:${{ github.sha }} -o cyclonedx-json=sbom/image.cdx.json -o spdx-json=sbom/image.spdx.json
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SBOM-todo-api-image
+          path: sbom/
+          retention-days: 90
+
+  deploy-staging:
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Deploying to staging.example.com"
+
+  deploy-production:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: echo "Deploying todo-api to production namespace"
