@@ -1,0 +1,9 @@
+.ssh-deploy:
+  stage: deploy
+  script:
+    - echo "Deploying to $DEPLOY_HOST for $CI_ENVIRONMENT_NAME"
+
+.k8s-deploy:
+  stage: deploy
+  script:
+    - echo "Deploying $K8S_DEPLOYMENT to $K8S_NAMESPACE namespace"
